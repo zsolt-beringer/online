@@ -106,7 +106,7 @@ public class LOActivity extends AppCompatActivity {
     private URI documentUri;
 
     private String urlToLoad;
-    private WebView mWebView = null;
+    private COWebView mWebView = null;
     private SharedPreferences sPrefs;
     private Handler mMainHandler = null;
     private RateAppController rateAppController;
@@ -334,7 +334,7 @@ public class LOActivity extends AppCompatActivity {
             finish();
         }
 
-        mWebView = findViewById(R.id.browser);
+        mWebView = (COWebView) findViewById(R.id.browser);
 
         WebSettings webSettings = mWebView.getSettings();
         webSettings.setJavaScriptEnabled(true);
