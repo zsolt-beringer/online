@@ -18,6 +18,7 @@ L.Control.TopToolbar = L.Control.extend({
 		map.on('updatepermission', this.onUpdatePermission, this);
 		map.on('wopiprops', this.onWopiProps, this);
 		map.on('commandstatechanged', this.onCommandStateChanged, this);
+		map.on('contextchange', this.onContextChange, this);
 
 		if (!window.mode.isMobile()) {
 			map.on('updatetoolbarcommandvalues', this.updateCommandValues, this);
@@ -59,7 +60,7 @@ L.Control.TopToolbar = L.Control.extend({
 		this.map.focus();
 	},
 
-	_updateVisibilityForToolbar: function(toolbar) {
+	_updateVisibilityForToolbar: function(toolbar, context) {
 		if (!toolbar)
 			return;
 
@@ -76,6 +77,15 @@ L.Control.TopToolbar = L.Control.extend({
 			else if (((window.mode.isMobile() && item.mobile === true) || (window.mode.isTablet() && item.tablet === true) || (window.mode.isDesktop() && item.desktop === true) || (window.ThisIsAMobileApp && item.mobilebrowser === true)) && item.hidden) {
 				toShow.push(item.id);
 			}
+
+			if (context && item.context) {
+				if (item.context.indexOf(context) >= 0)
+					toShow.push(item.id);
+				else
+					toHide.push(item.id);
+			} else if (!context && item.context) {
+				toHide.push(item.id);
+			}
 		});
 
 		console.log('explicitly hiding: ' + toHide);
@@ -83,6 +93,10 @@ L.Control.TopToolbar = L.Control.extend({
 
 		toHide.forEach(function(item) { toolbar.hide(item); });
 		toShow.forEach(function(item) { toolbar.show(item); });
+	},
+
+	onContextChange: function(event) {
+		this._updateVisibilityForToolbar(w2ui['editbar'], event.context);
 	},
 
 	// mobile:false means hide it both for normal Online used from a mobile phone browser, and in a mobile app on a mobile phone
@@ -227,7 +241,8 @@ L.Control.TopToolbar = L.Control.extend({
 			{type: 'break', id: 'breaksidebar', hidden: true},
 			{type: 'button',  id: 'fold',  img: 'fold', desktop: true, mobile: false, hidden: true},
 			{type: 'button',  id: 'hamburger-tablet',  img: 'hamburger', desktop: false, mobile: false, tablet: true, iosapptablet: false, hidden: true},
-			{type: 'button', id: 'languagecode', desktop: false, mobile: true, tablet: false}
+			{type: 'button', id: 'languagecode', desktop: false, mobile: true, tablet: false},
+			{type: 'button', id: 'contextbutton', img: 'basicshapes_ellipse', context: ['Table']}
 		];
 	},
 
