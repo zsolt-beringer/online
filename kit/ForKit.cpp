@@ -44,6 +44,7 @@
 #include <common/Seccomp.hpp>
 #include <common/SigUtil.hpp>
 #include <security.h>
+#include <ftw.h>
 
 #ifndef KIT_IN_PROCESS
 static bool NoCapsForKit = false;
@@ -450,6 +451,99 @@ static void printArgumentHelp()
     std::cout << "" << std::endl;
 }
 
+int changeOwnerToRootFunction(const char *fpath,
+                                const struct stat* /*sb*/,
+                                int typeflag,
+                                struct FTW* /*ftwbuf*/)
+{
+    switch (typeflag)
+    {
+    case FTW_F:
+    case FTW_D:
+    case FTW_SL:
+        // Change owner to root and avoid dereferencing symbolic links.
+        if (fchownat(-1, fpath, 0, 0, AT_SYMLINK_NOFOLLOW) == -1 && errno != ENOENT)
+        {
+            LOG_ERR("\nError while changing owner for path " << fpath << " : " << errno);
+            return FTW_STOP;
+        }
+        break;
+    case FTW_DNR:
+        LOG_ERR("nftw: Cannot read directory '" << fpath << '\'');
+        return FTW_STOP;
+    case FTW_NS:
+        LOG_ERR("nftw: stat failed for '" << fpath << '\'');
+        return FTW_STOP;
+    default:
+        LOG_FTL("nftw: unexpected typeflag: '" << typeflag);
+        assert(!"nftw: unexpected typeflag.");
+        break;
+    }
+
+    return FTW_CONTINUE;
+}
+
+bool copyAndChangeOwner(std::string& source)
+{
+    std::string srcRes = FileUtil::realpath(source);
+    std::string dest;
+
+    if (srcRes.back() == '/')
+        srcRes.pop_back();
+    dest = srcRes + "_tmp";
+
+    Poco::File(dest).createDirectories();
+    // Here it is essential to execute a copy SHELL command.
+    // This is for fixing slow hard-linking issue in overlay2
+    // file system driver.
+    std::string cmd = std::string("cp -a ") + srcRes + "/. " + dest;
+    if (system(cmd.c_str()))
+    {
+        LOG_ERR("Failed to copy through shell command from " << srcRes << " to " << dest << " while preparing for hard-linking.");
+        FileUtil::removeFile(dest, true);
+        return false;
+    }
+
+    // After copy, the owner of the files is lool. Need to change
+    // to root to avoid files being changed by lool user.
+    // Should we check also permissions ? For now avoid that. Assume
+    // that permissions were set explicitly and that they must be kept.
+    if (nftw(dest.c_str(), changeOwnerToRootFunction, 10, FTW_ACTIONRETVAL|FTW_PHYS))
+    {
+        LOG_ERR("Failed to change owner while preparing for hard-linking.");
+        FileUtil::removeFile(dest, true);
+        return false;
+    }
+
+    // Remove original folder and rename new folder back to original folder's name
+    FileUtil::removeFile(srcRes, true);
+    if (::rename(dest.c_str(), srcRes.c_str()))
+    {
+        LOG_INF("Failed to rename " << dest << " to " << srcRes << "with error: " << strerror(errno));
+        return false;
+    }
+
+    return true;
+}
+
+// There is a problem in docker's overlay2 storage driver which triggers
+// a copy-on-write when hard-linking to a file that resides in a lower layer.
+// The copy-on-write is very slow.
+// To fix it we need to force a copy of the folder into the container's layer.
+// This is faster and the result is that the copy of the original folder is
+// brought in container's layer and thus hard-linking is very fast because
+// there is no need to perform copy-on-write from a lower level.
+bool prepareForHardLinking(std::string& sysTemplate, std::string& loTemplate)
+{
+    if (!copyAndChangeOwner(sysTemplate))
+        return false;
+
+    if (!copyAndChangeOwner(loTemplate))
+        return false;
+
+    return true;
+}
+
 int main(int argc, char** argv)
 {
     /*WARNING: PRIVILEGED CODE CHECKING START */
@@ -666,6 +760,15 @@ int main(int argc, char** argv)
 
     if (Util::getProcessThreadCount() != 1)
         LOG_ERR("Error: forkit has more than a single thread after pre-init");
+
+    // Perform this in forkit because it needs to be performed only once
+    // and if performed in kit then there is need to sync between multiple
+    // kit instances.
+    // TO FIX: avoid running it unless hard-linking will be performed.
+    if (prepareForHardLinking(sysTemplate, loTemplate))
+        LOG_INF("prepareForHardLinking succeeded.");
+    else
+        LOG_INF("prepareForHardLinking failed.");
 
     // Link the network and system files in sysTemplate, if possible.
     JailUtil::SysTemplate::setupDynamicFiles(sysTemplate);
